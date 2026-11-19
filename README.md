@@ -18,7 +18,7 @@ PYTHONPATH=agents/movie-agent/src MONGODB_URI=mongodb://unused python3.11 -m pyt
 ```
 
 ## Prepare an Atlas workspace
-Run `agentengine create --template hello-world-agent --name movie-agent --llm anthropic` to generate a local project and its `project-config.yaml`, and `agentengine init` to register it to your own Atlas project. The private local `.env` and account-specific `project-config.yaml` must not be copied from someone else's workspace. Use `gitops.provider=archive` for this API workflow. Set `LLM_API_KEY` in platform secrets, and `MONGODB_URI` via Atlas setup; provision only when you accept billing.
+Run `agentengine create --template hello-world-agent --name movie-agent --llm gemini` to generate a local project and its `project-config.yaml`, and `agentengine init` to register it to your own Atlas project. The private local `.env` and account-specific `project-config.yaml` must not be copied from someone else's workspace. Use `gitops.provider=archive` for this API workflow. Set your Google Gemini API key as `LLM_API_KEY` in platform secrets, and `MONGODB_URI` via Atlas setup; provision only when you accept billing.
 
 **Important:** Deployment is disabled by default. After configuring project/workspace variables, CI service account secrets, Atlas, database seeding and `SMOKE_TEST_NONCE`, set the repository variable `ENABLE_ATLAS_DEPLOY` to `true` to enable deployment on merges to main, or explicitly run the GitHub workflow on main with `confirm_deploy=true`. These operations can incur Atlas costs. A `production` GitHub environment name does not imply that Agent Engine is production-ready.
 
@@ -28,3 +28,6 @@ GitHub environment secrets: `AE_SA_CLIENT_ID`, `AE_SA_CLIENT_SECRET`, `SMOKE_TES
 Never commit `.env`, MongoDB connection strings with passwords, API keys or OAuth tokens.
 
 Source template: https://github.com/mongodb/agent-engine-examples/tree/main/templates/hello-world-agent
+
+## Gemini provider
+The agent uses `ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")`, with the Google AI Studio key supplied through `LLM_API_KEY`. The code previously used Anthropic; do not use an Anthropic-only local scaffold unchanged. Existing local users should update `agents/movie-agent/src/agent_movie_agent/llm.py` to match this repository, then refresh dependencies with `uv lock` from the agent directory. Gemini API and Atlas hosting have separate billing policies.
