@@ -1,0 +1,55 @@
+name: Test movie agent and optional deploy
+ 
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_deploy:
+        description: 'I understand deployment may create billable Atlas resources'
+        type: boolean
+        default: false
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+ 
+permissions:
+  contents: read
+ 
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install pytest==9.2.0 mongomock==4.3.0 pymongo==4.20.0
+      - name: Compile agent source
+        run: python -m compileall -q agents/movie-agent/src
+      - name: Run offline tests
+        env:
+          PYTHONPATH: agents/movie-agent/src
+          MONGODB_URI: mongodb://unused  # read before the mock replaces MongoClient
+        run: python -m pytest -q
+ 
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_deploy == true && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 75
+    concurrency:
+      group: movie-agent-deploy
+      cancel-in-progress: false
+    env:
+      PROJECT_ID: ${{ vars.AGENTENGINE_PROJECT_ID }}
+      WORKSPACE_ID: ${{ vars.AGENTENGINE_WORKSPACE_ID }}
+      CLIENT_ID: ${{ secrets.AE_SA_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AE_SA_CLIENT_SECRET }}
+      SMOKE_TEST_NONCE: ${{ secrets.SMOKE_TEST_NONCE }}
+      COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, deploy, and verify
+        run: bash scripts/ci_deploy.sh
