@@ -31,7 +31,7 @@ jobs:
         env:
           PYTHONPATH: agents/movie-agent/src
           MONGODB_URI: mongodb://unused  # read before the mock replaces MongoClient
-        run: python -m pytest -q
+        run: python -m pytest -q tests/
  
   deploy:
     if: github.event_name == 'workflow_dispatch' && inputs.confirm_deploy == true && github.ref == 'refs/heads/main'
