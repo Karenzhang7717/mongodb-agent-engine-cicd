@@ -1,0 +1,88 @@
+name: Diagnose previous failed Agent Engine build (read only)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/diagnose-existing-build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 8
+    env:
+      PROJECT_ID: ${{ vars.AGENTENGINE_PROJECT_ID }}
+      WORKSPACE_ID: ${{ vars.AGENTENGINE_WORKSPACE_ID }}
+      CLIENT_ID: ${{ secrets.AE_SA_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AE_SA_CLIENT_SECRET }}
+      BUILD_ID: bld_01M7WV7WMNJV6ZQNKAV8PGHDW3
+    steps:
+      - name: Read only existing build logs (no build or deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PROJECT_ID:?}" "${WORKSPACE_ID:?}" "${CLIENT_ID:?}" "${CLIENT_SECRET:?}"
+          ACCESS_TOKEN=$(curl --fail-with-body -fsS -u "$CLIENT_ID:$CLIENT_SECRET" \
+            -d 'grant_type=client_credentials' \
+            'https://agentengine.mongodb.com/api/v1/oauth/token' | jq -er '.access_token')
+          LOGFILE="$RUNNER_TEMP/agentengine-build-logs-response"
+          URL="https://agentengine.mongodb.com/api/v1/projects/$PROJECT_ID/workspaces/$WORKSPACE_ID/builds/$BUILD_ID/logs"
+          HTTP_STATUS=$(curl -sS -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H 'Accept: application/vnd.agent-engine-2026-09-20-preview+json' \
+            -o "$LOGFILE" -w '%{http_code}' "$URL")
+          unset ACCESS_TOKEN
+          echo "Existing build logs endpoint HTTP $HTTP_STATUS; build ID $BUILD_ID"
+          if [[ "$HTTP_STATUS" != 200 ]]; then
+            echo 'Unable to fetch existing build logs. No build or deploy was attempted.' >&2
+            exit 1
+          fi
+          python3 - "$LOGFILE" <<'PY'
+          import gzip
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          raw = Path(sys.argv[1]).read_bytes()
+          if raw[:2] == b'\x1f\x8b':
+              raw = gzip.decompress(raw)
+          content = raw.decode('utf-8', errors='replace')
+          try:
+              data = json.loads(content)
+          except json.JSONDecodeError:
+              data = content
+
+          def strings(value):
+              if isinstance(value, str):
+                  yield value
+              elif isinstance(value, list):
+                  for item in value:
+                      yield from strings(item)
+              elif isinstance(value, dict):
+                  for item in value.values():
+                      yield from strings(item)
+
+          useful = re.compile(
+              r'uv|dependenc|resolv|conflict|because|no solution|package|wheel|sdk|'
+              r'runner.shared|langgraph|0\.0\.0|cannot|failed|error|version', re.I)
+          sensitive = re.compile(
+              r'password|secret|token|authorization|api.key|mongodb\+srv|'
+              r'https?://|X-Amz-|bearer|client.id|signature', re.I)
+          matches = []
+          for value in strings(data):
+              for line in value.splitlines():
+                  line = line.strip()
+                  if useful.search(line) and not sensitive.search(line):
+                      matches.append(line[:400])
+          print(f'Filtered dependency diagnostics: {len(matches)} matching lines')
+          for line in matches[-80:]:
+              print(line)
+          if not matches:
+              if isinstance(data, dict):
+                  print('Non-sensitive top-level response field names:', sorted(data)[:30])
+              print('No safe dependency diagnostics found; inspect build logs in Agent Engine CLI.')
+          PY
