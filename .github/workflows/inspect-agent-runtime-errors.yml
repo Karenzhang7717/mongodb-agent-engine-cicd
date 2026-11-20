@@ -1,0 +1,74 @@
+name: Inspect Agent Engine invoke errors (read only)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-agent-runtime-errors.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 7
+    env:
+      PROJECT_ID: ${{ vars.AGENTENGINE_PROJECT_ID }}
+      WORKSPACE_ID: ${{ vars.AGENTENGINE_WORKSPACE_ID }}
+      CLIENT_ID: ${{ secrets.AE_SA_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AE_SA_CLIENT_SECRET }}
+    steps:
+      - name: Read invoke-time Agent/Tool Sandbox runtime logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PROJECT_ID:?}" "${WORKSPACE_ID:?}" "${CLIENT_ID:?}" "${CLIENT_SECRET:?}"
+          TOKEN=$(curl --fail-with-body --silent --show-error \
+            --user "$CLIENT_ID:$CLIENT_SECRET" --data 'grant_type=client_credentials' \
+            'https://agentengine.mongodb.com/api/v1/oauth/token' | jq -er '.access_token')
+          OUT="$RUNNER_TEMP/runtime-logs.json"
+          URL="https://agentengine.mongodb.com/api/v1/projects/$PROJECT_ID/agent-logs"
+          CODE=$(curl -sS -o "$OUT" -w '%{http_code}' \
+            --get -H "Authorization: Bearer $TOKEN" \
+            -H 'Accept: application/vnd.agent-engine-2026-09-20-preview+json' \
+            --data-urlencode "workspace_id=$WORKSPACE_ID" \
+            --data-urlencode 'start_time=2026-11-20T16:40:00Z' \
+            --data-urlencode 'end_time=2026-11-20T16:43:30Z' \
+            --data-urlencode 'limit=1000' "$URL")
+          unset TOKEN
+          echo "Agent runtime log GET HTTP $CODE"
+          if [[ "$CODE" != 200 ]]; then
+            python3 - "$OUT" <<'PY'
+          import json,sys
+          try:
+              d=json.load(open(sys.argv[1]))
+              print("Safe error:",{"code":d.get("code"),"message":d.get("message")})
+          except Exception: print("No JSON response")
+          PY
+            exit 1
+          fi
+          python3 - "$OUT" <<'PY'
+          import json, re, sys
+          d=json.load(open(sys.argv[1]))
+          logs=d.get("logs",[])
+          print("Runtime log entries:",len(logs))
+          print("Response pagination:",{"hasMore":d.get("hasMore")})
+          exclude=re.compile(r'ae_sa_sk_|authorization|bearer |password|mongodb\+srv://|api[_ -]?key|secret|X-Amz-',re.I)
+          candidates=[]
+          for item in logs:
+              if not isinstance(item,dict): continue
+              msg=item.get("message","")
+              if not isinstance(msg,str): continue
+              if exclude.search(msg): continue
+              if (item.get("level") in ("ERROR","WARNING")
+                  or re.search(r'exception|traceback|failed|error|denied|unauthorized|model|sandbox|token|timeout',msg,re.I)):
+                  candidates.append({
+                      "timestamp":item.get("timestamp"),"level":item.get("level"),
+                      "service":item.get("service"),"source":item.get("source"),
+                      "message":msg[:600]})
+          print("Filtered diagnostics:",len(candidates))
+          for row in candidates[-65:]:
+              print(json.dumps(row,ensure_ascii=False))
+          PY
