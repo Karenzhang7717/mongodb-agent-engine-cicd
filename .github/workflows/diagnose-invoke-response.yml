@@ -48,7 +48,7 @@ jobs:
           if not isinstance(d,dict): raise SystemExit(0)
           fields=("success","status","code","error_code","error_type","message","error",
                   "reason","request_id","trace_id","execution_id","session_id")
-          sensitive=re.compile(r'ae_sa_sk_|bearer\\s|mongodb\\+srv://|sk-[A-Za-z0-9]{15,}',re.I)
+          sensitive=re.compile(r'ae_sa_sk_|bearer |mongodb|sk-[A-Za-z0-9]{15,}',re.I)
           for k in fields:
               if k not in d: continue
               value=d[k]
