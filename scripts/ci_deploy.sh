@@ -164,8 +164,15 @@ case "$START_HTTP_STATUS" in
     BUILD_ID="$EXISTING_BUILD_ID"
     echo "Reusing active build for commit $COMMIT_SHA: $BUILD_ID" ;;
   *)
-    echo "Build start failed: HTTP $START_HTTP_STATUS" >&2
-    jq -r '.code // .message // "No error detail"' <<< "$START_RESPONSE" >&2 || true
+    echo "Build start failed: HTTP $START_HTTP_STATUS; build ID $BUILD_ID" >&2
+    # Print only error code and human-readable validation fields, never the
+    # raw JSON response or request headers, which could contain credentials.
+    jq -r '
+      "Code: " + (.code // "not supplied"),
+      (if (.message | type) == "string" then "Message: " + .message else empty end),
+      (if (.details.reason | type) == "string" then "Reason: " + .details.reason else empty end),
+      (if (.details.field | type) == "string" then "Field: " + .details.field else empty end)
+    ' <<< "$START_RESPONSE" >&2 || true
     exit 1 ;;
 esac
  
