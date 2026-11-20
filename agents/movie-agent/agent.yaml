@@ -23,8 +23,15 @@ sandboxes:
   agent:
     secrets: ["*"]
     tools: []
+    # A concrete egress mode is required for the first Atlas deployment.
+    # The platform base policy still permits its own services and linked Atlas.
+    network:
+      egress_mode: deny_all
   tool:
     secrets: ["*"]
+    # Atlas access uses the linked-cluster base policy, not public egress.
+    network:
+      egress_mode: deny_all
     tools:
       - get_current_date
       - save_user_info
