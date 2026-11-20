@@ -7,6 +7,10 @@ requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
 dependencies = [
     # Atlas Agent Engine supplies SDK and runner wheels in the build runtime.
+    # VM builds re-resolve dependencies. Platform runner 0.11.15 requires
+    # protobuf >=6.33.6,<7; without this bound uv picks protobuf 7.x and
+    # then fails to install the platform runtime wheels.
+    "protobuf>=6.33.6,<7",
     "grpcio>=1.76.0",
     "grpcio-health-checking>=1.76.0",
     "python-dotenv>=1.0.0",

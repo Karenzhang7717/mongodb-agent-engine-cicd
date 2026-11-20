@@ -1,5 +1,6 @@
 """Pre-deployment structural checks for the Agent Engine manifest."""
 from pathlib import Path
+import tomllib
 
 import yaml
 
@@ -23,3 +24,15 @@ def test_agent_manifest_declares_sandbox_egress_modes():
     assert tool_network["egress"] == [
         {"fqdn": "generativelanguage.googleapis.com", "ports": [443]}
     ]
+
+
+def test_platform_runtime_protobuf_bound():
+    """Pin only the protobuf compatibility range, not the platform SDK wheels."""
+    project_file = Path(__file__).resolve().parents[1] / "agents/movie-agent/pyproject.toml"
+    project = tomllib.loads(project_file.read_text(encoding="utf-8"))
+    dependencies = project["project"]["dependencies"]
+    assert "protobuf>=6.33.6,<7" in dependencies
+    assert not any(
+        dep.startswith(("agent-engine-runner-shared", "agent-engine-sdk-langgraph"))
+        for dep in dependencies
+    )
