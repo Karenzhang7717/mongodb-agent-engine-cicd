@@ -66,10 +66,17 @@ fi
 
 UPLOAD_SUCCEEDED=false
 for UPLOAD_CONTENT_TYPE in "${UPLOAD_CONTENT_TYPES[@]}"; do
+  # If the presigned URL signs If-None-Match, S3 must receive the same
+  # header. S3 PutObject accepts only '*' for this conditional write.
+  # Without it, SigV4 returns SignatureDoesNotMatch even for a valid URL.
+  UPLOAD_HEADERS=(-H "Content-Type: $UPLOAD_CONTENT_TYPE")
+  if [[ ";$SIGNED_HEADERS;" == *";if-none-match;"* ]]; then
+    UPLOAD_HEADERS+=(-H 'If-None-Match: *')
+  fi
   UPLOAD_RESPONSE_FILE=$(mktemp)
   if ! UPLOAD_HTTP_STATUS=$(curl --path-as-is --globoff -sS -X PUT \
     --upload-file "$RUNNER_TEMP/agent.tar.gz" \
-    -H "Content-Type: $UPLOAD_CONTENT_TYPE" \
+    "${UPLOAD_HEADERS[@]}" \
     -o "$UPLOAD_RESPONSE_FILE" -w '%{http_code}' "$UPLOAD_URL"); then
     rm -f "$UPLOAD_RESPONSE_FILE"
     unset UPLOAD_URL
