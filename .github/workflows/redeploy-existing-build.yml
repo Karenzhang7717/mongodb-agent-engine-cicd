@@ -1,0 +1,102 @@
+name: Redeploy successful build after Atlas sync (one-time)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/redeploy-existing-build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    concurrency:
+      group: movie-agent-deploy
+      cancel-in-progress: false
+    env:
+      PROJECT_ID: ${{ vars.AGENTENGINE_PROJECT_ID }}
+      WORKSPACE_ID: ${{ vars.AGENTENGINE_WORKSPACE_ID }}
+      CLIENT_ID: ${{ secrets.AE_SA_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AE_SA_CLIENT_SECRET }}
+      SMOKE_TEST_NONCE: ${{ secrets.SMOKE_TEST_NONCE }}
+      BUILD_ID: bld_01M7WW8SZTYDRVBN0KY4ZRC7MW
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Atlas link then deploy existing successful image
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PROJECT_ID:?}" "${WORKSPACE_ID:?}" "${CLIENT_ID:?}" "${CLIENT_SECRET:?}" "${SMOKE_TEST_NONCE:?}"
+          ROOT="https://agentengine.mongodb.com/api/v1/projects/$PROJECT_ID"
+          BASE="$ROOT/workspaces/$WORKSPACE_ID"
+          ACCEPT='Accept: application/vnd.agent-engine-2026-09-20-preview+json'
+          get_token() {
+            curl --fail-with-body --silent --show-error \
+              --user "$CLIENT_ID:$CLIENT_SECRET" \
+              --data 'grant_type=client_credentials' \
+              'https://agentengine.mongodb.com/api/v1/oauth/token' | jq -er '.access_token'
+          }
+          ACCESS_TOKEN=$(get_token)
+          LINK=$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $ACCESS_TOKEN" -H "$ACCEPT" "$ROOT/atlas-link")
+          jq -e '.egress_sync.sync_status == "success" and .egress_sync.cluster_count >= 1' <<<"$LINK" >/dev/null || {
+            echo 'Atlas egress is not ready; no deployment requested.' >&2
+            jq '{egress_sync: {sync_status: .egress_sync.sync_status, cluster_count: .egress_sync.cluster_count, last_sync_at: .egress_sync.last_sync_at}}' <<<"$LINK"
+            exit 1
+          }
+          echo "Atlas egress sync ready: $(jq -r '.egress_sync.cluster_count' <<<"$LINK") linked cluster(s)"
+          echo "Reusing previously successful build $BUILD_ID (no source upload, no rebuild)"
+          RESP_FILE=$(mktemp)
+          HTTP=$(curl -sS -X POST -o "$RESP_FILE" -w '%{http_code}' \
+            -H "Authorization: Bearer $ACCESS_TOKEN" -H "$ACCEPT" -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg id "$BUILD_ID" '{build_id:$id}')" "$BASE/deployments")
+          if [[ "$HTTP" != 202 && "$HTTP" != 200 ]]; then
+            echo "Deploy request HTTP $HTTP" >&2
+            jq '{code,message}' "$RESP_FILE" >&2 || true
+            rm -f "$RESP_FILE"
+            exit 1
+          fi
+          DEPLOY_ID=$(jq -er '.deployment_id' "$RESP_FILE")
+          rm -f "$RESP_FILE"
+          echo "Requested deployment $DEPLOY_ID using existing build $BUILD_ID"
+          for attempt in $(seq 1 180); do
+            STATE_FILE=$(mktemp)
+            STATUS_CODE=$(curl -sS -o "$STATE_FILE" -w '%{http_code}' \
+              -H "Authorization: Bearer $ACCESS_TOKEN" -H "$ACCEPT" "$BASE/deployments/current")
+            if [[ "$STATUS_CODE" != 200 ]]; then
+              rm -f "$STATE_FILE"
+              sleep 10
+              continue
+            fi
+            CURRENT_ID=$(jq -r '.deployment_id // empty' "$STATE_FILE")
+            STATE=$(jq -r '.status // "pending"' "$STATE_FILE")
+            if [[ "$CURRENT_ID" == "$DEPLOY_ID" ]]; then
+              if [[ "$STATE" == successful || "$STATE" == succeeded ]]; then
+                if jq -e '.health.available == true and ([.components[]? | (.available == true and .ready_replicas == .replicas)] | all)' "$STATE_FILE" >/dev/null; then
+                  echo "Deployment healthy: $DEPLOY_ID"
+                  rm -f "$STATE_FILE"
+                  break
+                fi
+              fi
+              if [[ "$STATE" == failed || "$STATE" == cancelled || "$STATE" == rolled_back ]]; then
+                echo "Deployment $DEPLOY_ID failed" >&2
+                jq '{status,error_message,missing_secrets}' "$STATE_FILE" >&2
+                rm -f "$STATE_FILE"
+                exit 1
+              fi
+            fi
+            rm -f "$STATE_FILE"
+            if ((attempt == 180)); then
+              echo "Deployment health check timed out for $DEPLOY_ID" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          ACCESS_TOKEN=$(get_token)
+          export ACCESS_TOKEN PROJECT_ID WORKSPACE_ID SMOKE_TEST_NONCE
+          python3 scripts/smoke_test.py
+          echo "Verified existing build $BUILD_ID, deployment $DEPLOY_ID"
