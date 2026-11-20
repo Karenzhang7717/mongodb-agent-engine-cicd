@@ -42,10 +42,46 @@ BUILD_ID=$(jq -er '.build_id' <<< "$INIT")
 UPLOAD_URL=$(jq -er '.upload_url' <<< "$INIT")
  
 echo "Building source commit $COMMIT_SHA as $BUILD_ID"
-# The presigned URL itself is the upload credential. Do NOT add a bearer header.
-curl --fail-with-body -sS -X PUT --upload-file "$RUNNER_TEMP/agent.tar.gz" \
-  -H 'Content-Type: application/gzip' "$UPLOAD_URL" >/dev/null
+UPLOAD_EXPIRES_AT=$(jq -r '.upload_expires_at // "not reported"' <<< "$INIT")
+echo "Archive upload URL expires at: $UPLOAD_EXPIRES_AT"
+
+# The presigned URL itself is the credential; NEVER print it or send an
+# Authorization header. Capture the storage error privately so a 403 tells
+# us whether the signature, expiration, or access policy was rejected.
+UPLOAD_RESPONSE_FILE=$(mktemp)
+if ! UPLOAD_HTTP_STATUS=$(curl -sS -X PUT --upload-file "$RUNNER_TEMP/agent.tar.gz" \
+  -H 'Content-Type: application/gzip' -o "$UPLOAD_RESPONSE_FILE" \
+  -w '%{http_code}' "$UPLOAD_URL"); then
+  rm -f "$UPLOAD_RESPONSE_FILE"
+  unset UPLOAD_URL
+  echo 'Archive upload failed due to a network or TLS error' >&2
+  exit 1
+fi
 unset UPLOAD_URL
+
+if [[ "$UPLOAD_HTTP_STATUS" != 200 ]]; then
+  echo "Archive upload failed: HTTP $UPLOAD_HTTP_STATUS; build ID $BUILD_ID" >&2
+  # Storage returns an XML error. Only emit safe diagnostic fields; never
+  # output the presigned URL, bearer token, or raw response body.
+  python3 - "$UPLOAD_RESPONSE_FILE" <<'PY'
+import sys
+from xml.etree import ElementTree
+try:
+    root = ElementTree.parse(sys.argv[1]).getroot()
+    fields = {node.tag.rsplit('}', 1)[-1]: (node.text or '') for node in root.iter()}
+    code = fields.get('Code', 'unavailable')
+    request_id = fields.get('RequestId', 'unavailable')
+    print(f"Storage error code: {code}; request ID: {request_id}", file=sys.stderr)
+    if 'expired' in fields.get('Message', '').lower():
+        print('Storage reports the presigned URL has expired.', file=sys.stderr)
+except (ElementTree.ParseError, OSError):
+    print('Storage did not return a parseable XML error body.', file=sys.stderr)
+PY
+  rm -f "$UPLOAD_RESPONSE_FILE"
+  exit 1
+fi
+rm -f "$UPLOAD_RESPONSE_FILE"
+echo "Archive uploaded successfully for build $BUILD_ID"
  
 # A simultaneous build of the same commit may yield 409 BUILD_ALREADY_ACTIVE.
 # GitHub concurrency reduces overlap. The start handler below recovers
