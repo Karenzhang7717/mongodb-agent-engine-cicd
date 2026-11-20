@@ -73,11 +73,16 @@ jobs:
               r'password|secret|token|authorization|api.key|mongodb\+srv|'
               r'https?://|X-Amz-|bearer|client.id|signature', re.I)
           matches = []
+          in_dependency_error = False
           for value in strings(data):
               for line in value.splitlines():
                   line = line.strip()
-                  if useful.search(line) and not sensitive.search(line):
+                  if 'No solution found when resolving dependencies' in line:
+                      in_dependency_error = True
+                  if line and (in_dependency_error or useful.search(line)) and not sensitive.search(line):
                       matches.append(line[:400])
+                  if in_dependency_error and 'ERROR: installing the platform Agent Engine SDK' in line:
+                      in_dependency_error = False
           print(f'Filtered dependency diagnostics: {len(matches)} matching lines')
           for line in matches[-80:]:
               print(line)
