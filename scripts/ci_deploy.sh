@@ -211,7 +211,7 @@ for attempt in $(seq 1 180); do
   CURRENT=$(curl --fail-with-body -sS \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     -H "$ACCEPT" \
-    "https://agentengine.mongodb.com/api/v1/projects/$PROJECT_ID/deployments/$DEPLOY_ID")
+    "$BASE/deployments/current")
   CURRENT_ID=$(jq -r '.deployment_id // empty' <<< "$CURRENT")
   STATE=$(jq -r '.status // "pending"' <<< "$CURRENT")
   if [[ "$CURRENT_ID" == "$DEPLOY_ID" && ( "$STATE" == 'successful' || "$STATE" == 'succeeded' ) ]] && \
