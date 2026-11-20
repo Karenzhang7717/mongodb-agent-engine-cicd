@@ -12,7 +12,14 @@ def test_agent_manifest_declares_sandbox_egress_modes():
 
     # The first Atlas deployment requires an explicit egress policy. Keep the
     # tutorial sandbox network closed except for the platform base policy.
-    for sandbox in ("agent", "tool"):
-        network = config["sandboxes"][sandbox]["network"]
-        assert network["egress_mode"] == "deny_all"
-        assert not network.get("egress")
+    # The agent does not need direct internet access. The tool sandbox,
+    # which dispatches wrapped LLM calls, reaches only the Gemini API.
+    agent_network = config["sandboxes"]["agent"]["network"]
+    assert agent_network["egress_mode"] == "deny_all"
+    assert not agent_network.get("egress")
+
+    tool_network = config["sandboxes"]["tool"]["network"]
+    assert tool_network["egress_mode"] == "allow_list"
+    assert tool_network["egress"] == [
+        {"fqdn": "generativelanguage.googleapis.com", "ports": [443]}
+    ]
