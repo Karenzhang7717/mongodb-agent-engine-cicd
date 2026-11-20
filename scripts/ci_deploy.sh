@@ -45,25 +45,47 @@ echo "Building source commit $COMMIT_SHA as $BUILD_ID"
 UPLOAD_EXPIRES_AT=$(jq -r '.upload_expires_at // "not reported"' <<< "$INIT")
 echo "Archive upload URL expires at: $UPLOAD_EXPIRES_AT"
 
-# The presigned URL itself is the credential; NEVER print it or send an
-# Authorization header. Capture the storage error privately so a 403 tells
-# us whether the signature, expiration, or access policy was rejected.
-UPLOAD_RESPONSE_FILE=$(mktemp)
-if ! UPLOAD_HTTP_STATUS=$(curl -sS -X PUT --upload-file "$RUNNER_TEMP/agent.tar.gz" \
-  -H 'Content-Type: application/gzip' -o "$UPLOAD_RESPONSE_FILE" \
-  -w '%{http_code}' "$UPLOAD_URL"); then
-  rm -f "$UPLOAD_RESPONSE_FILE"
-  unset UPLOAD_URL
-  echo 'Archive upload failed due to a network or TLS error' >&2
-  exit 1
-fi
-unset UPLOAD_URL
+# Inspect only the signed header names (never print the upload URL, its
+# signature, a URL query string, or the response's canonical request).
+SIGNED_HEADERS=$(python3 - "$UPLOAD_URL" <<'PY'
+import sys
+from urllib.parse import parse_qs, urlsplit
+query = parse_qs(urlsplit(sys.argv[1]).query)
+print(query.get("X-Amz-SignedHeaders", ["unavailable"])[0])
+PY
+)
+echo "Presigned URL signed header names: $SIGNED_HEADERS"
 
-if [[ "$UPLOAD_HTTP_STATUS" != 200 ]]; then
-  echo "Archive upload failed: HTTP $UPLOAD_HTTP_STATUS; build ID $BUILD_ID" >&2
-  # Storage returns an XML error. Only emit safe diagnostic fields; never
-  # output the presigned URL, bearer token, or raw response body.
-  python3 - "$UPLOAD_RESPONSE_FILE" <<'PY'
+# AWS signatures cover the exact request path. Preserve the presigned URL
+# verbatim, including path segments and encoded query characters.
+# Only try alternate Content-Type if Content-Type is explicitly signed.
+UPLOAD_CONTENT_TYPES=("application/gzip")
+if [[ ";$SIGNED_HEADERS;" == *";content-type;"* || "$SIGNED_HEADERS" == content-type* ]]; then
+  UPLOAD_CONTENT_TYPES+=("application/octet-stream")
+fi
+
+UPLOAD_SUCCEEDED=false
+for UPLOAD_CONTENT_TYPE in "${UPLOAD_CONTENT_TYPES[@]}"; do
+  UPLOAD_RESPONSE_FILE=$(mktemp)
+  if ! UPLOAD_HTTP_STATUS=$(curl --path-as-is --globoff -sS -X PUT \
+    --upload-file "$RUNNER_TEMP/agent.tar.gz" \
+    -H "Content-Type: $UPLOAD_CONTENT_TYPE" \
+    -o "$UPLOAD_RESPONSE_FILE" -w '%{http_code}' "$UPLOAD_URL"); then
+    rm -f "$UPLOAD_RESPONSE_FILE"
+    unset UPLOAD_URL
+    echo 'Archive upload failed due to a network or TLS error' >&2
+    exit 1
+  fi
+
+  if [[ "$UPLOAD_HTTP_STATUS" == 200 ]]; then
+    UPLOAD_SUCCEEDED=true
+    rm -f "$UPLOAD_RESPONSE_FILE"
+    break
+  fi
+
+  # Parse a small, whitelisted subset of the storage XML. Do not leak
+  # the signed URL, credentials, canonical request, or full response body.
+  UPLOAD_ERROR=$(python3 - "$UPLOAD_RESPONSE_FILE" <<'PY'
 import sys
 from xml.etree import ElementTree
 try:
@@ -71,16 +93,26 @@ try:
     fields = {node.tag.rsplit('}', 1)[-1]: (node.text or '') for node in root.iter()}
     code = fields.get('Code', 'unavailable')
     request_id = fields.get('RequestId', 'unavailable')
-    print(f"Storage error code: {code}; request ID: {request_id}", file=sys.stderr)
-    if 'expired' in fields.get('Message', '').lower():
-        print('Storage reports the presigned URL has expired.', file=sys.stderr)
+    print(code + "|" + request_id)
 except (ElementTree.ParseError, OSError):
-    print('Storage did not return a parseable XML error body.', file=sys.stderr)
+    print('unparseable|unavailable')
 PY
+)
   rm -f "$UPLOAD_RESPONSE_FILE"
+  UPLOAD_ERROR_CODE=${UPLOAD_ERROR%%|*}
+  UPLOAD_REQUEST_ID=${UPLOAD_ERROR#*|}
+  echo "Archive upload HTTP $UPLOAD_HTTP_STATUS; code: $UPLOAD_ERROR_CODE; request ID: $UPLOAD_REQUEST_ID; Content-Type: $UPLOAD_CONTENT_TYPE" >&2
+  # Do not retry permission, expiration, or non-signature failures.
+  if [[ "$UPLOAD_HTTP_STATUS" != 403 || "$UPLOAD_ERROR_CODE" != SignatureDoesNotMatch ]]; then
+    unset UPLOAD_URL
+    exit 1
+  fi
+done
+unset UPLOAD_URL
+if [[ "$UPLOAD_SUCCEEDED" != true ]]; then
+  echo "Archive upload signature mismatch persisted; build ID $BUILD_ID. Review signed headers and contact MongoDB Agent Engine support with the S3 request ID." >&2
   exit 1
 fi
-rm -f "$UPLOAD_RESPONSE_FILE"
 echo "Archive uploaded successfully for build $BUILD_ID"
  
 # A simultaneous build of the same commit may yield 409 BUILD_ALREADY_ACTIVE.
