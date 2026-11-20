@@ -1,0 +1,61 @@
+name: Inspect Agent Engine Atlas link (read only)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-atlas-link.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    env:
+      PROJECT_ID: ${{ vars.AGENTENGINE_PROJECT_ID }}
+      CLIENT_ID: ${{ secrets.AE_SA_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.AE_SA_CLIENT_SECRET }}
+    steps:
+      - name: Read the linked Atlas project and egress sync status
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PROJECT_ID:?}" "${CLIENT_ID:?}" "${CLIENT_SECRET:?}"
+          ACCESS_TOKEN=$(curl --fail-with-body --silent --show-error \
+            --user "$CLIENT_ID:$CLIENT_SECRET" \
+            --data 'grant_type=client_credentials' \
+            'https://agentengine.mongodb.com/api/v1/oauth/token' | jq -er '.access_token')
+          OUTPUT="$RUNNER_TEMP/atlas-link-state.json"
+          HTTP=$(curl -sS -o "$OUTPUT" -w '%{http_code}' \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H 'Accept: application/vnd.agent-engine-2026-09-20-preview+json' \
+            "https://agentengine.mongodb.com/api/v1/projects/$PROJECT_ID/atlas-link")
+          unset ACCESS_TOKEN
+          echo "Atlas link GET HTTP $HTTP"
+          if [[ "$HTTP" != 200 ]]; then
+            python3 - "$OUTPUT" <<'PY'
+          import json, sys
+          try:
+              j=json.load(open(sys.argv[1]))
+              print('Safe response:', {'code':j.get('code'),'message':j.get('message')})
+          except Exception: print('No JSON response')
+          PY
+            exit 1
+          fi
+          python3 - "$OUTPUT" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          print('Response fields:',sorted(d.keys()))
+          for field in ('status','linked','environment','atlas_environment','atlas_project_id','project_id','last_synced_at'):
+              if field in d: print(field+':',d[field])
+          for obj_name in ('egress_sync','atlas_link','link','sync'):
+              obj=d.get(obj_name)
+              if isinstance(obj,dict):
+                  print(obj_name+':',{k:v for k,v in obj.items() if k in (
+                      'status','cluster_count','last_sync_at','last_synced_at','error','error_code',
+                      'atlas_project_id','project_id','environment','linked','sync_status'
+                  )})
+          PY
