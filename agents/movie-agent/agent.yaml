@@ -29,9 +29,13 @@ sandboxes:
       egress_mode: deny_all
   tool:
     secrets: ["*"]
-    # Atlas access uses the linked-cluster base policy, not public egress.
+    # The tool sandbox executes provider LLM calls. Restrict outbound access
+    # to Google Gemini's HTTPS API; linked Atlas uses the platform base policy.
     network:
-      egress_mode: deny_all
+      egress_mode: allow_list
+      egress:
+        - fqdn: generativelanguage.googleapis.com
+          ports: [443]
     tools:
       - get_current_date
       - save_user_info
