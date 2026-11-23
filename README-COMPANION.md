@@ -30,4 +30,4 @@ Never commit `.env`, MongoDB connection strings with passwords, API keys or OAut
 Source template: https://github.com/mongodb/agent-engine-examples/tree/main/templates/hello-world-agent
 
 ## Gemini provider
-The agent uses `ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")`, with the Google AI Studio key supplied through `LLM_API_KEY`. The code previously used Anthropic; do not use an Anthropic-only local scaffold unchanged. Existing local users should update `agents/movie-agent/src/agent_movie_agent/llm.py` to match this repository, then refresh dependencies with `uv lock` from the agent directory. Gemini API and Atlas hosting have separate billing policies.
+The agent uses `ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite")`, with the Google AI Studio key supplied through `LLM_API_KEY`. The code previously used Anthropic; do not use an Anthropic-only local scaffold unchanged. Existing local users should update `agents/movie-agent/src/agent_movie_agent/llm.py` to match this repository, then refresh dependencies with `uv lock` from the agent directory. Gemini API and Atlas hosting have separate billing policies.
