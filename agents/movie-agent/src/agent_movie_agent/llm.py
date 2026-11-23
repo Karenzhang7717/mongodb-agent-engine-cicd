@@ -5,7 +5,7 @@ import os
 from langchain_core.language_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-MODEL = "gemini-2.5-flash-lite"
+MODEL = "gemini-3.5-flash-lite"
 
 
 def build_llm(temperature: float = 0) -> BaseChatModel:

@@ -36,3 +36,17 @@ def test_platform_runtime_protobuf_bound():
         dep.startswith(("agent-engine-runner-shared", "agent-engine-sdk-langgraph"))
         for dep in dependencies
     )
+
+
+def test_gemini_model_supports_new_free_tier_keys():
+    """Avoid retired Gemini model IDs that fail for newly created API keys."""
+    import ast
+    source = Path(__file__).resolve().parents[1] / "agents/movie-agent/src/agent_movie_agent/llm.py"
+    module = ast.parse(source.read_text(encoding="utf-8"))
+    model_values = [
+        ast.literal_eval(target.value)
+        for target in module.body
+        if isinstance(target, ast.Assign)
+        and any(isinstance(name, ast.Name) and name.id == "MODEL" for name in target.targets)
+    ]
+    assert model_values == ["gemini-3.5-flash-lite"]
