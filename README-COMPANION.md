@@ -2,14 +2,14 @@
 
 Companion code for the article *From Git Push to a Deployed Agent: A CI/CD Pipeline for AI Agents*.
 
-**Status:** Example source and offline tests; full remote Atlas deployment has **not yet been verified**. Agent Engine is in Public Preview and MongoDB does not recommend production deployments during preview.
+**Status:** End-to-end Atlas Agent Engine **Build → Deploy → Invoke verified** on November 23, 2026, with the Gemini 3.5 Flash-Lite model. [Successful GitHub Actions Run #45232170070](https://github.com/Karenzhang7717/mongodb-agent-engine-cicd/actions/runs/45232170070). Agent Engine is in Public Preview and MongoDB does not recommend production deployments during preview.
 
 ## Structure
 - `agents/movie-agent`: LangGraph agent based on MongoDB's official `hello-world-agent` template, renamed to `agent_movie_agent`.
 - `scripts/seed_movies.py`: create sample movie records in a selected MongoDB database.
 - `tests/test_movie_query.py`: database-free tests using real `mongomock`.
 - `.github/workflows/deploy.yml`: offline CI on PRs and main; deployment stays disabled until explicitly enabled through `ENABLE_ATLAS_DEPLOY` or manual dispatch.
-- `scripts/ci_deploy.sh`: archive-build/deploy/health/invoke pipeline (not yet verified end-to-end).
+- `scripts/ci_deploy.sh`: archive-build/deploy/health/invoke pipeline (verified end-to-end on November 23, 2026).
 
 ## Run offline tests
 ```bash
@@ -31,3 +31,15 @@ Source template: https://github.com/mongodb/agent-engine-examples/tree/main/temp
 
 ## Gemini provider
 The agent uses `ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite")`, with the Google AI Studio key supplied through `LLM_API_KEY`. The code previously used Anthropic; do not use an Anthropic-only local scaffold unchanged. Existing local users should update `agents/movie-agent/src/agent_movie_agent/llm.py` to match this repository, then refresh dependencies with `uv lock` from the agent directory. Gemini API and Atlas hosting have separate billing policies.
+
+## Verified cloud run
+
+The November 23, 2026 workflow completed the entire pipeline successfully, including a real seeded Dune lookup against MongoDB:
+
+- [GitHub Actions Run #45232170070](https://github.com/Karenzhang7717/mongodb-agent-engine-cicd/actions/runs/45232170070) — source commit `4a452b412133d95a63cc3fa4596868c34d16257c`
+- Build: `bld_01M84RJ1CD8DKG38S8BSKVFFEG`, approximately 2 minutes 48 seconds from archive/build start to successful build
+- Deployment: `deploy-5195ea0e`, approximately 1 minute 12 seconds from request to healthy
+- Smoke invoke: Dune lookup returned the seeded MongoDB verification marker approximately 23 seconds after deployment health
+- Total remote archive/build to verified invoke: approximately 4 minutes 24 seconds, excluding initial project and Atlas provisioning
+
+The deployment used a Gemini Free Tier API key; actual availability and quotas depend on the Google AI Studio project. Atlas hosting can still incur charges. Ordinary merges do not deploy unless explicitly enabled; the verification used a one-time workflow.
